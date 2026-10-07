@@ -10,6 +10,15 @@
 // const VERSION = 7;  // extra 2: + colour by distance from the centre
 const VERSION = 8;     // extra 3: + rotation speed depends on mouse distance
 
+// ---------------------------------------------------------------------------
+// MATRIX — TODO 6: the same rotation, as a mat2x2f. Works with any VERSION.
+// Leave exactly ONE line uncommented.
+// ---------------------------------------------------------------------------
+// const MATRIX = 0;  // TODO 5 as it was: cos/sin written out by hand
+// const MATRIX = 1;  // checkpoint 6: R*p, turns exactly as before
+const MATRIX = 2;     // R*S*p (left) next to S*R*p (right): AB != BA
+// const MATRIX = 3;  // the classic bug: rows typed as columns = R^t, spins backwards
+
 const canvas = document.querySelector('canvas');
 if (!navigator.gpu) throw new Error('WebGPU not available');
 
@@ -23,8 +32,8 @@ ctx.configure({ device, format, alphaMode: 'opaque' });
 console.log('WebGPU ready:', format);
 
 const SHADER = `
-  // 32 bytes: angle, aspect, mouse.xy | n, version, (padding)
-  struct U {angle: f32, aspect: f32, mouse: vec2f, n: f32, version: f32, pad: vec2f};
+  // 32 bytes: angle, aspect, mouse.xy | n, version, matrix, (padding)
+  struct U {angle: f32, aspect: f32, mouse: vec2f, n: f32, version: f32, matrix: f32, pad: f32};
   @group(0) @binding(0) var<uniform> u: U;
 
   const R = 0.4;          // polygon radius
@@ -40,7 +49,8 @@ const SHADER = `
     return 0.5 + 0.5 * cos(TAU * (h + vec3f(0.0, 1.0 / 3.0, 2.0 / 3.0)));
   }
 
-  @vertex fn vs(@builtin(vertex_index) i: u32)
+  @vertex fn vs(@builtin(vertex_index) i: u32,
+                @builtin(instance_index) inst: u32)   // which copy: 0 or 1
        -> VSOut {
     var local: vec2f;
     var col: vec3f;
@@ -72,10 +82,41 @@ const SHADER = `
     }
 
     let a = u.angle;
-    var q = vec2f(local.x * cos(a) - local.y * sin(a),
-                  local.x * sin(a) + local.y * cos(a));
+    let compare = u.matrix > 1.5 && u.matrix < 2.5;
+    var q: vec2f;
+
+    if (u.matrix < 0.5) {
+      // TODO 5: the rotation written out by hand
+      q = vec2f(local.x * cos(a) - local.y * sin(a),
+                local.x * sin(a) + local.y * cos(a));
+    } else {
+      // TODO 6: the same rotation, as a matrix. It is built once per vertex
+      // HERE; on Thursday it is built once per object in JavaScript and sent
+      // in the uniform buffer.
+      // mat2x2f takes COLUMNS: first column (cos, sin), second (-sin, cos).
+      var R = mat2x2f(cos(a), sin(a), -sin(a), cos(a));
+      if (u.matrix > 2.5) {
+        // the numbers typed row by row: that is R^t = rotation by -a
+        R = mat2x2f(cos(a), -sin(a), sin(a), cos(a));
+      }
+      let S = mat2x2f(1.4, 0.0, 0.0, 0.6);   // stretch x, squash y
+
+      if (!compare) {
+        q = R * local;           // checkpoint 6: turns exactly as before
+      } else if (inst == 0u) {
+        q = R * S * local;       // read right to left: S first, then R
+      } else {
+        q = S * R * local;       // R first, then S: the shape shears as it turns
+      }
+    }
+
     q.x /= u.aspect;   // undo the canvas stretch (after rotating)
-    q += u.mouse;      // move to the mouse (already in clip space)
+    if (compare) {
+      // two copies side by side instead of following the mouse
+      if (inst == 0u) { q.x -= 0.5; } else { q.x += 0.5; }
+    } else {
+      q += u.mouse;    // move to the mouse (already in clip space)
+    }
 
     var out: VSOut;
     out.pos = vec4f(q, 0.0, 1.0);
@@ -122,6 +163,7 @@ const slider = document.querySelector('#n');
 const nLabel = document.querySelector('#nval');
 slider.parentElement.style.visibility = VERSION >= 6 ? 'visible' : 'hidden';
 slider.addEventListener('input', () => { nLabel.textContent = slider.value; });
+document.querySelector('#pair').style.display = MATRIX === 2 ? 'flex' : 'none';
 
 let mouse = [0, 0];
 canvas.addEventListener('pointermove', (e) => {
@@ -161,7 +203,7 @@ function frame() {
   const n = Number(slider.value);
   device.queue.writeBuffer(ubuf, 0, new Float32Array([
     angle, canvas.width / canvas.height, mouse[0], mouse[1],
-    n, VERSION, 0, 0,
+    n, VERSION, MATRIX, 0,
   ]));
 
   const enc = device.createCommandEncoder();
@@ -172,7 +214,8 @@ function frame() {
 
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bind);
-  pass.draw(VERSION >= 6 ? 3 * n : 6);   // N-gon = N triangles
+  // N-gon = N triangles; MATRIX 2 draws 2 instances (copies) of it
+  pass.draw(VERSION >= 6 ? 3 * n : 6, MATRIX === 2 ? 2 : 1);
   pass.end();
 
   device.queue.submit([enc.finish()]);

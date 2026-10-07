@@ -10,11 +10,13 @@
   code{color:#e8b07a}
   .ctl{display:flex;gap:10px;align-items:center;font-size:14px;margin-top:12px}
   .ctl input{flex:1}
+  .pair{justify-content:space-around;font-size:14px;margin-top:8px}
 </style>
 </head>
 <body>
   <div>
     <canvas></canvas>
+    <div class="pair" id="pair"><span><code>R*S*p</code>: S first, then R</span><span><code>S*R*p</code>: R first, then S</span></div>
     <label class="ctl">N = <span id="nval">6</span> <input id="n" type="range" min="3" max="32" value="6"></label>
     <p>CS405 Lab 1 · open the console · edit <code>main.js</code>, following the TODOs in order.</p>
   </div>
